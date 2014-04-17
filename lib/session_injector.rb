@@ -1,5 +1,6 @@
 require 'active_support/message_encryptor'
 require 'uri'
+require 'rack/utils'
 
 module Rack
   module Middleware
@@ -49,8 +50,8 @@ module Rack
 
       def call(env)
         env[SESSION_INJECTOR_KEY] = self; # store ourselves for downstream access
-        reconstitute_session(env)
         response = @app.call(env)
+        reconstitute_session(env, *response)
         response = propagate_session(env, *response)
         response
       end
@@ -149,7 +150,7 @@ module Rack
       private
 
       # load and inject any session that might be conveyed in this request
-      def reconstitute_session(env)
+      def reconstitute_session(env, status, headers, response)
         request = Rack::Request.new(env)
         token = request.params[HANDSHAKE_PARAM]
         return unless token
@@ -172,8 +173,14 @@ module Rack
           env[RACK_COOKIE_STRING] = [env[RACK_COOKIE_STRING], "#{@session_id_key}=#{cookie_value}"].compact.join(';')
         end
         # if the cookie string has already been read by Rack, update Rack's internal cookie hash variable
-        request = Rack::Request.new(env)
-        request.cookies[@session_id_key] = cookie_value # call cookies() to make Rack::Request do its stuff
+        #request = Rack::Request.new(env)
+        #request.cookies[@session_id_key] = cookie_value # call cookies() to make Rack::Request do its stuff
+        cookie = {
+          :value => cookie_value,
+          :httponly => true,
+          :path => '/'
+        }
+        Rack::Utils.set_cookie_header!(headers, @session_id_key, cookie)
       end
 
       # decrypts a handshake token sent to us from a source domain
