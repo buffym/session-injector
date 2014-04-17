@@ -50,9 +50,12 @@ module Rack
 
       def call(env)
         env[SESSION_INJECTOR_KEY] = self; # store ourselves for downstream access
-        response = @app.call(env)
-        reconstitute_session(env, *response)
-        response = propagate_session(env, *response)
+        cookie_value = reconstitute_session(env)
+        status, headers, response = @app.call(env)
+        if cookie_value
+          set_session_in_response(headers, cookie_value)
+        end
+        response = propagate_session(env, status, headers, response)
         response
       end
 
@@ -149,15 +152,24 @@ module Rack
 
       private
 
+      def set_session_in_response(headers, cookie_value)
+        cookie = {
+            :value => cookie_value,
+            :httponly => true,
+            :path => '/'
+        }
+        Rack::Utils.set_cookie_header!(headers, @session_id_key, cookie)
+      end
+
       # load and inject any session that might be conveyed in this request
-      def reconstitute_session(env, status, headers, response)
+      def reconstitute_session(env)
         request = Rack::Request.new(env)
         token = request.params[HANDSHAKE_PARAM]
-        return unless token
+        return nil unless token
 
         # decrypt the token and get the session cookie value
         handshake = decrypt_handshake_token(token, env)
-        return unless handshake
+        return nil unless handshake
 
         cookie_value = handshake[:session_id]
 
@@ -175,12 +187,7 @@ module Rack
         # if the cookie string has already been read by Rack, update Rack's internal cookie hash variable
         #request = Rack::Request.new(env)
         #request.cookies[@session_id_key] = cookie_value # call cookies() to make Rack::Request do its stuff
-        cookie = {
-          :value => cookie_value,
-          :httponly => true,
-          :path => '/'
-        }
-        Rack::Utils.set_cookie_header!(headers, @session_id_key, cookie)
+        return cookie_value
       end
 
       # decrypts a handshake token sent to us from a source domain
